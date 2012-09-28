@@ -1,0 +1,13 @@
+name: parser-prolog
+version: 0.0.1
+build-type: Simple
+license: LGPL
+cabal-version:  >= 1.2
+maintainer: Angelos Charalambidis <a.charalambidis@di.uoa.gr>
+
+library
+  exposed-modules: Language.Prolog.Parser
+                   Language.Prolog.Lexer
+  build-depends:   base >= 3, parsec >= 3
+  hs-source-dirs: src
+  extensions: FlexibleContexts
