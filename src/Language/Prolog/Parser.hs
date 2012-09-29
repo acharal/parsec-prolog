@@ -3,7 +3,7 @@ module Language.Prolog.Parser where
 
 import qualified Language.Prolog.Lexer as L
 import Language.Prolog.Syntax
-import qualified Language.Prolog.Operators as Operators
+import qualified Language.Prolog.Operator as Operators
 import Text.Parsec
 import Text.Parsec.Expr
 import Data.Char
@@ -14,6 +14,11 @@ data ParseState =
     ParseSt { operatorTable :: Operators.OperatorTable } 
 
 type ParserT s m a = ParsecT s ParseState m a
+
+
+-- helpers
+
+followedBy p after = do { rv <- p; after; return rv }
 
 
 -- lexer 
@@ -39,12 +44,8 @@ dot = L.dot L.prolog
 inf :: Stream s m Char => ParsecT s u m String
 inf = L.symbol L.prolog ":-"
 
--- utils
-
--- located p = do { b <- getPosition; p; e <- getPosition }
-
--- listExpr (Op "," ls) = concatMap listExpr ls
--- listExpr e = [e]
+quotedString :: Stream s m Char => ParsecT s u m String
+quotedString = L.quotedString L.prolog
 
 -- parser
 
@@ -56,7 +57,7 @@ variable =  do { s <- identifier
                } <?> ("variable")
 
 struct :: Stream s m Char => ParserT s m Expr
-struct =  do { s <- L.quotedString <|> identifier
+struct =  do { s <- quotedString <|> identifier
              ; as <- option [] args
              ; if (isUpper (head s))
                then unexpected ("upper first letter") 
@@ -66,8 +67,22 @@ struct =  do { s <- L.quotedString <|> identifier
           expr' = parens expr <|> term
 
 term :: Stream s m Char => ParserT s m Expr
-term = variable <|> struct <?> ("term")
+term = try variable <|> struct <|> list <?> ("term")
 
+list :: Stream s m Char => ParserT s m Expr
+list = try listEmpty <|> listNonEmpty <?> ("list")  
+    where 
+        listatom  = commaSep1 (term <|> expr)
+        tail      = do { slash
+                       ; variable <|> listEmpty
+                       }
+        slash     = L.symbol L.prolog "|"
+        bracket p = between (L.symbol L.prolog "[") (L.symbol L.prolog "]") p
+        listEmpty = do { L.symbol L.prolog "[]"; return (Str "[]" []); }
+        listNonEmpty = bracket $ do { es <- listatom
+                                    ; tl <- option (Str "[]" []) tail
+                                    ; return $ foldr (\n -> \m -> Cons n m) tl es 
+                                    }
 
 expr :: Stream s m Char => ParserT s m Expr
 expr = do {  opTable <- buildOpTable 
@@ -101,7 +116,7 @@ body :: Stream s m Char => ParserT s m Expr
 body = expr <?> ("body literal")
 
 fact :: Stream s m Char => ParserT s m (Maybe Expr, Maybe Expr)
-fact = do {  h <- struct; dot; return (Just h, Nothing); }
+fact = do {  h <- struct `followedBy` dot; return (Just h, Nothing); }
 
 rule :: Stream s m Char => ParserT s m (Maybe Expr, Maybe Expr)
 rule = do 
@@ -125,7 +140,9 @@ goal = do { b <- between q dot body
 
 sentence :: Stream s m Char => ParserT s m (Maybe Expr, Maybe Expr)
 sentence = clause <|> command' <|> goal
-    where command' = do { c <- command; opDirective1 c; return c }
+    where command' = do { c <- command
+                        ; opDirective1 c
+                        ; return c }
 
 initProlog :: Stream s m Char => ParserT s m ()
 initProlog = updateState (\s -> s{ operatorTable = ops }) 
@@ -149,11 +166,12 @@ opDirective _ = return ()
 
 -- top-level parsing
 -- TODO: Parse block { }
--- TODO: Parse lists [ ]
 -- TODO: Parse anonymous variable _
 -- TODO: Parse operators in head
 -- TODO: Parse predicates of form module:predicate.
 -- TODO: Attach position to AST
+-- TODO: Parse module directives
+-- TODO: Parse include Directives
 
 parseProlog p input = 
     case runPrologParser of 
