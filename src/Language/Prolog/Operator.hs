@@ -3,10 +3,9 @@ module Language.Prolog.Operator where
 import Data.List
 
 data Operator = Operator { opName :: String,  opAssoc :: String }
-   deriving Eq
+   deriving (Eq, Show)
 
 type OperatorTable = [(Operator, Int)]
-
 
 
 precOp (op,prec) = prec

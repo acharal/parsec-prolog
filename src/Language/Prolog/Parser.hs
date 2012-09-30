@@ -67,12 +67,15 @@ struct =  do { s <- quotedString <|> identifier
           expr' = parens expr <|> term
 
 term :: Stream s m Char => ParserT s m Expr
-term = try variable <|> struct <|> list <?> ("term")
+term = try variable <|> struct <|> list <|> cut <?> ("term")
+
+cut :: Stream s m Char => ParserT s m Expr
+cut = do { string "!"; return (Str "!" []) }
 
 list :: Stream s m Char => ParserT s m Expr
 list = try listEmpty <|> listNonEmpty <?> ("list")  
     where 
-        listatom  = commaSep1 (term <|> expr)
+        listatom  = commaSep1 (expr <|> term)
         tail      = do { slash
                        ; variable <|> listEmpty
                        }
@@ -86,28 +89,40 @@ list = try listEmpty <|> listNonEmpty <?> ("list")
 
 expr :: Stream s m Char => ParserT s m Expr
 expr = do {  opTable <- buildOpTable 
-          ;  buildExpressionParser opTable term'
+          ;  buildExpressionParser opTable (try term')
           }
     where
-          term' = term <|> parens expr
+          term' = term <|> parens expr 
 
 buildOpTable :: Stream s m Char => ParsecT s ParseState m (OperatorTable s ParseState m Expr)
 buildOpTable = do { st <- getState
                   ; return $ mkOpTable (operatorTable st)
                   }
     where mkOpTable ops = map (map opMap) $ Operators.groupByPrec ops
+            where 
+              oper f name = try $ do { L.symbol L.prolog name
+                                     ; notFollowedBy (choice ops2)
+                                     ; return (f name) }
+                   where ops2    = map (\x -> try (string x)) $ map (skip (length name)) opNames
+                         opNames = filter (f2 name) $ map (Operators.opName.fst) ops
+                         f2 n m  = length n < length m && n `isPrefixOf` m
 
-          opMap op | Operators.isPrefixOp  op = prefixOp (Operators.opName op)
-                   | Operators.isPostfixOp op = postfixOp (Operators.opName op)
-                   | otherwise                = infixOp (Operators.opName op) (assocMap op)
-                    where oper f name = try $ do { L.symbol L.prolog name; return (f name) }
-                          infixOp name assoc = Infix   (oper (\n -> \x -> \y -> Op n [x,y]) name) assoc
-                          prefixOp name      = Prefix  (oper (\n -> \x -> Op n [x]) name)
-                          postfixOp name     = Postfix (oper (\n -> \x -> Op n [x]) name)
+              opMap op | Operators.isPrefixOp  op = prefixOp (Operators.opName op)
+                       | Operators.isPostfixOp op = postfixOp (Operators.opName op)
+                       | otherwise                = infixOp (Operators.opName op) (assocMap op)
+                       where 
+                             infixOp name assoc = Infix   (oper (\n -> \x -> \y -> Op n [x,y]) name) assoc
+    
+                             prefixOp name      = Prefix  (oper (\n -> \x -> Op n [x]) name)
+ 
+                             postfixOp name     = Postfix (oper (\n -> \x -> Op n [x]) name)
 
-                          assocMap op | Operators.isAssocLeft  op = AssocLeft
-                                      | Operators.isAssocRight op = AssocRight
-                                      | otherwise                = AssocNone
+                             assocMap op | Operators.isAssocLeft  op = AssocLeft
+                                         | Operators.isAssocRight op = AssocRight
+                                         | otherwise                = AssocNone
+skip n [] = []
+skip 0 x = x
+skip n (x:xs) = skip (n-1) xs
 
 literal :: Stream s m Char => ParserT s m Expr
 literal = expr <?> ("literal")
@@ -145,8 +160,7 @@ sentence = clause <|> command' <|> goal
                         ; return c }
 
 initProlog :: Stream s m Char => ParserT s m ()
-initProlog = updateState (\s -> s{ operatorTable = ops }) 
-    where ops = [(Operators.Operator "," "xfx", 1000)]
+initProlog = return ()
 
 
 -- | Directives must be only in goal clause (without head literal)
@@ -173,12 +187,30 @@ opDirective _ = return ()
 -- TODO: Parse module directives
 -- TODO: Parse include Directives
 
+runPrologParser p st sourcename input = runP p' st sourcename input
+    where p' = do 
+            L.whiteSpace L.prolog
+            res <- p
+            st' <- getState
+            return (res, st')
+
+parseProlog2 input = do
+    ops <- readFile "/home/angel/edu/phd/code/parsec-prolog/pl/op.pl"
+    (p, optable)<- parse st' "/home/angel/edu/phd/code/parsec-prolog/pl/op.pl" ops
+    (p2, _) <- parse optable "" input
+    print p2
+    where parse st src input = case runPrologParser (many1 sentence) st src input of
+                                   Left err ->  do putStr "parse error at"
+                                                   print err
+                                                   error ""
+                                   Right res -> return res
+          st' = ParseSt []
+
 parseProlog p input = 
-    case runPrologParser of 
+    case runPrologParser p st "" input of 
         Left err -> do putStr "parse error at" 
                        print err
-        Right x -> print x
-    where runPrologParser =  runP ( initProlog >> L.whiteSpace L.prolog >> p) st "" input
-          st = ParseSt []
+        Right (x,_) -> print x
+    where st = ParseSt []
 
 

@@ -5,8 +5,10 @@ module Language.Prolog.Lexer (
 
 import Text.Parsec
 import Text.Parsec.Token
+import qualified Text.Parsec.Token as L
 import Text.Parsec.Language
 
+type Lexer s u m = GenTokenParser s u m
 
 prologStyle :: Stream s m Char => GenLanguageDef s u m
 prologStyle = emptyDef 
@@ -30,8 +32,13 @@ prologDef = prologStyle
 prolog :: Stream s m Char => GenTokenParser s u m
 prolog  = makeTokenParser prologDef
 
-quotedString :: Stream s m Char => ParsecT s u m String
-quotedString = lexeme prolog (
+{-
+singleQuote = char '\''
+doubleQuote = char '"'
+-}
+
+quotedString :: Stream s m Char => GenTokenParser s u m ->  ParsecT s u m String
+quotedString lexer = lexeme lexer (
                    do{ str <- between (char '\'')
                                       (char '\'' <?> "end of string")
                                       (many stringChar)
