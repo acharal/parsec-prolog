@@ -1,6 +1,6 @@
 module Language.Prolog.Lexer (
         module Text.Parsec.Token,
-        prologStyle, prologDef, prolog, quotedString
+        prologStyle, prologDef, prolog, stringLiteral2, varIdent, conIdent
     ) where
 
 import Text.Parsec
@@ -16,7 +16,7 @@ prologStyle = emptyDef
                , commentEnd      = "*/"
                , commentLine     = "%"
                , nestedComments  = False
-               , identStart      = letter <|> digit <|> oneOf "_"
+               , identStart      = letter <|> digit <|> oneOf "#$&*+-./:<=>?@^~\\_"
                , identLetter     = alphaNum <|> oneOf "_"
                , opStart         = identStart prologStyle
                , opLetter        = identLetter prologStyle
@@ -32,27 +32,51 @@ prologDef = prologStyle
 prolog :: Stream s m Char => GenTokenParser s u m
 prolog  = makeTokenParser prologDef
 
-{-
-singleQuote = char '\''
-doubleQuote = char '"'
--}
+varIdent :: Stream s m Char => GenTokenParser s u m -> ParsecT s u m String
+varIdent lexer = lexeme lexer $ try $
+    do { c  <- upper <|> underscore
+       ; cs <- many (alphaNum <|> underscore) 
+       ; return (c:cs)
+       }
+    where underscore = char '_'
 
-quotedString :: Stream s m Char => GenTokenParser s u m ->  ParsecT s u m String
-quotedString lexer = lexeme lexer (
-                   do{ str <- between (char '\'')
-                                      (char '\'' <?> "end of string")
-                                      (many stringChar)
+conIdent :: Stream s m Char => GenTokenParser s u m -> ParsecT s u m String
+conIdent lexer = lexeme lexer $ try $ 
+          choice [ graphicTokenString
+                 , letterIdent 
+                 ]
+    where graphicTokenString = do { c <- graphicToken
+                                  ; cs <- many (graphicToken <|> identLetter)
+                                  ; return (c:cs)
+                                  }
+          letterIdent  = do { c  <- identStart
+                            ; cs <- many identLetter
+                            ; return (c:cs)
+                            }
+          identStart   = lower
+          identLetter  = alphaNum <|> underscore
+          graphicToken = oneOf "#$&*+-./:<=>?@^~\\"
+          underscore   = char '_'
+
+stringLiteral2 :: Stream s m Char => GenTokenParser s u m -> ParsecT s u m String
+stringLiteral2 lexer = quotedString lexer '\'' <|> quotedString lexer '"'
+
+quotedString :: Stream s m Char => GenTokenParser s u m -> Char -> ParsecT s u m String
+quotedString lexer quote = lexeme lexer (
+                   do{ str <- between (char quote)
+                                      (char quote <?> "end of string")
+                                      (many (stringChar quote))
                      ; return (foldr (maybe id (:)) "" str)
                      }
                    <?> "literal string")
 
-stringChar :: Stream s m Char => ParsecT s u m (Maybe Char)
-stringChar = do{ c <- stringLetter; return (Just c) }
+stringChar :: Stream s m Char => Char -> ParsecT s u m (Maybe Char)
+stringChar quote = do{ c <- stringLetter quote; return (Just c) }
              <|> stringEscape
-             <|> escapedQuote
+             <|> escapedQuote quote
 
-stringLetter :: Stream s m Char => ParsecT s u m Char
-stringLetter = satisfy (\c -> (c /= '\'') && (c /= '\\'))
+stringLetter :: Stream s m Char => Char -> ParsecT s u m Char
+stringLetter quote = satisfy (\c -> (c /= quote) && (c /= '\\'))
 
 stringEscape :: Stream s m Char => ParsecT s u m (Maybe Char)
 stringEscape = do { char '\\'
@@ -60,8 +84,8 @@ stringEscape = do { char '\\'
                     <|> do { esc <- escapeCode; return (Just esc) }
                   }
 
-escapedQuote :: Stream s m Char => ParsecT s u m (Maybe Char)
-escapedQuote = try $ do { char '\'' ; c <- char '\''; return (Just c) }
+escapedQuote :: Stream s m Char => Char -> ParsecT s u m (Maybe Char)
+escapedQuote quote = try $ do { char quote; c <- char quote; return (Just c) }
 
 escapeGap :: Stream s m Char => ParsecT s u m Char
 escapeGap = do { many1 space
