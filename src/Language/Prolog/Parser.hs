@@ -134,7 +134,7 @@ expr = try (do { exprs <- getParser term'
     where
           term' = parens expr <|> do { t <- term; return [t]; } 
           commaToList (Op "," xs) = concatMap commaToList xs
-          commaToList e = [e]g
+          commaToList e = [e]
 --          getOpTable =  do { st <- getState; return (cachedTable st) }
             
           getParser t = do { st <-getState; cachedExprParser st t }
@@ -146,9 +146,9 @@ buildOpTable = do { st <- getState
                   }
     where mkOpTable ops = map (map opMap) $ Operators.groupByPrec ops
             where 
-              oper f name = do { L.symbol L.prolog name
-                               ; notFollowedBy (choice ops2)
-                               ; return (f name) }
+              oper f name = try $ do { L.symbol L.prolog name
+                                     ; notFollowedBy (choice ops2)
+                                     ; return (f name) }
                    where ops2    = map (\x -> try (string x)) $ map (skip (length name)) opNames
                          opNames = filter (f2 name) $ map (Operators.opName.fst) ops
                          f2 n m  = length n < length m && n `isPrefixOf` m
@@ -239,16 +239,15 @@ runPrologParser p st sourcename input = runP p' st sourcename input
             return (res, st')
 
 parseProlog2 input = do
-    ops <- readFile "pl/op.pl"
+    ops <- readFile "/home/angel/edu/phd/code/parsec-prolog/pl/op.pl"
     (p, optable)<- parse st' "pl/op.pl" ops
     f <- readFile input
-    (p2, _) <- parse optable "" f
---    print p2
-    print ("OK (clauses " ++ show (length p2) ++ ")")
+    result <- parse optable input f
+    return result
     where parse st src input = case runPrologParser (many1 sentence) st src input of
                                    Left err ->  do putStr "parse error at"
                                                    print err
-                                                   error ""
+                                                   fail ""
                                    Right res -> return res
           st' = ParseSt [] [] (buildExpressionParser [])
 

@@ -32,7 +32,7 @@ Executable test-prologparser
   Extensions:       FlexibleContexts 
   GHC-prof-options: -rtsopts -auto-all
 
-Library parsec-prolog
+Library
   Exposed-Modules:  Language.Prolog.Syntax,
                     Language.Prolog.Lexer,
                     Language.Prolog.Operator,

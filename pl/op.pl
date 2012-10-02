@@ -42,6 +42,10 @@
 :- op( 100, xfx, '@').
 :- op(  50, xfx, ':').      % module specification of a predicate Module:Pred
 
+:- op( 600,  fy, '\\+').    % negation as failure
+
+:- op(1100, xfx,'|').       % or alternative to ';'
+
 :- op( 701,  fy, 'dynamic').
 :- op( 701,  fy, 'multifile').
-:- op( 600,  fy, '\\+').
+:- op( 701,  fy, 'meta_predicate').
