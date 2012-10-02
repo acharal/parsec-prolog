@@ -34,8 +34,8 @@ prolog  = makeTokenParser prologDef
 
 varIdent :: Stream s m Char => GenTokenParser s u m -> ParsecT s u m String
 varIdent lexer = lexeme lexer $ try $
-    do { c  <- upper <|> underscore
-       ; cs <- many (alphaNum <|> underscore) 
+    do { c  <- underscore <|> upper
+       ; cs <- many (underscore <|> alphaNum) 
        ; return (c:cs)
        }
     where underscore = char '_'

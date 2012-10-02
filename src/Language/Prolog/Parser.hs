@@ -9,11 +9,16 @@ import Text.Parsec.Expr
 import Data.Char
 import Data.List
 
+import qualified Data.ByteString.Char8 as C
+import Text.Parsec.ByteString
 
-data ParseState = 
-    ParseSt { operatorTable :: Operators.OperatorTable } 
+data ParseState s m = 
+    ParseSt { operatorTable :: Operators.OperatorTable
+            , cachedTable   :: (OperatorTable s (ParseState s m) m [Expr])
+            , cachedExprParser :: ParserT s m [Expr] -> ParserT s m [Expr]
+            } 
 
-type ParserT s m a = ParsecT s ParseState m a
+type ParserT s m a = ParsecT s (ParseState s m) m a
 
 
 -- helpers
@@ -78,15 +83,13 @@ struct =  do { s  <- atom
              ; as <- option [] args
              ; return (Str s as)
              } <?> ("structure")
-    where args = try (parens expr) <|> parens (do { e <- commaSep1 expr; return (concatMap id e)} )
+    where -- args = try (parens expr) <|> parens (do { e <- commaSep1 expr; return (concatMap id e)} )
+          args = parens (do { e <- commaSep1 expr; return (concatMap id e)} )
           atom = conIdent <|> stringLiteral
 
 constant :: Stream s m Char => ParserT s m Expr
 constant =
-       do { s <- choice [ conIdent 
-                        , stringLiteral
-                        , lexeme (many1 alphaNum)
-                        ]
+       do { s <- lexeme (many1 alphaNum)
           ; return (Str s [])
           }
 
@@ -97,12 +100,12 @@ number = try $  do { num <- try naturalOrFloat <|> eitherInteger
     where eitherInteger = do { i <- integer; return (Left i); }        
 
 term :: Stream s m Char => ParserT s m Expr
-term = choice [ cut
-              , variable
-              , list
-              , try struct
+term = choice [ variable
+              , struct
               , number
               , constant
+              , list
+              , cut
               , parens term
               ] <?> ("term")
 
@@ -124,25 +127,28 @@ list = try listEmpty <|> listNonEmpty <?> ("list")
                                      }
 
 expr :: Stream s m Char => ParserT s m [Expr]
-expr = try (do { opTable <- buildOpTable 
-          ; exprs <- buildExpressionParser opTable (try term')
-          ; return (concatMap commaToList exprs)
-          })
+expr = try (do { exprs <- getParser term'
+               ; return (concatMap commaToList exprs)
+               })
        <|>  term'
     where
           term' = parens expr <|> do { t <- term; return [t]; } 
           commaToList (Op "," xs) = concatMap commaToList xs
-          commaToList e = [e]
+          commaToList e = [e]g
+--          getOpTable =  do { st <- getState; return (cachedTable st) }
+            
+          getParser t = do { st <-getState; cachedExprParser st t }
 
-buildOpTable :: Stream s m Char => ParsecT s ParseState m (OperatorTable s ParseState m [Expr])
+
+buildOpTable :: Stream s m Char => ParsecT s (ParseState s m) m (OperatorTable s (ParseState s m) m [Expr])
 buildOpTable = do { st <- getState
                   ; return $ mkOpTable (operatorTable st)
                   }
     where mkOpTable ops = map (map opMap) $ Operators.groupByPrec ops
             where 
-              oper f name = try $ do { L.symbol L.prolog name
-                                     ; notFollowedBy (choice ops2)
-                                     ; return (f name) }
+              oper f name = do { L.symbol L.prolog name
+                               ; notFollowedBy (choice ops2)
+                               ; return (f name) }
                    where ops2    = map (\x -> try (string x)) $ map (skip (length name)) opNames
                          opNames = filter (f2 name) $ map (Operators.opName.fst) ops
                          f2 n m  = length n < length m && n `isPrefixOf` m
@@ -168,30 +174,31 @@ literal = expr <?> ("literal")
 body :: Stream s m Char => ParserT s m [Expr]
 body = expr <?> ("body literal")
 
-fact :: Stream s m Char => ParserT s m (Maybe Expr, Maybe [Expr])
-fact = do {  h <- struct `followedBy` dot; return (Just h, Nothing); }
+fact :: Stream s m Char => ParserT s m (Maybe Expr, [Expr])
+fact = do {  h <- struct `followedBy` dot; return (Just h, []); }
 
-rule :: Stream s m Char => ParserT s m (Maybe Expr, Maybe [Expr])
+rule :: Stream s m Char => ParserT s m (Maybe Expr, [Expr])
 rule = do 
    h <- struct
-   b <- between inf dot body
-   return (Just h, Just b)
+--   b <- between inf dot body
+   b <- (option [] (do { inf; body })) `followedBy` dot
+   return (Just h, b)
 
-clause :: Stream s m Char => ParserT s m (Maybe Expr, Maybe [Expr])
-clause = try fact <|> rule
+clause :: Stream s m Char => ParserT s m (Maybe Expr, [Expr])
+clause = rule --try fact <|> rule
 
-command :: Stream s m Char => ParserT s m (Maybe Expr, Maybe [Expr])
+command :: Stream s m Char => ParserT s m (Maybe Expr, [Expr])
 command = do { b <- between inf dot body
-             ; return (Nothing, Just b) 
+             ; return (Nothing, b)
              }
 
-goal :: Stream s m Char => ParserT s m (Maybe Expr, Maybe [Expr])
+goal :: Stream s m Char => ParserT s m (Maybe Expr, [Expr])
 goal = do { b <- between q dot body
-          ; return (Nothing, Just b)
+          ; return (Nothing, b)
           }
    where q = L.symbol L.prolog "?-"
 
-sentence :: Stream s m Char => ParserT s m (Maybe Expr, Maybe [Expr])
+sentence :: Stream s m Char => ParserT s m (Maybe Expr, [Expr])
 sentence = choice [ command'
                   , goal
                   , clause
@@ -203,22 +210,21 @@ sentence = choice [ command'
 
 -- | Directives must be only in goal clause (without head literal)
 
-opDirective1 (Nothing, Just (e:es)) = opDirective e
+opDirective1 (Nothing, e:es) = opDirective e
 opDirective1 _ = return ()
 
-opDirective (Str "op" [Num (Left p), (Str a []), (Str n [])]) =
-          updateState (updateOpTable op)
-    where updateOpTable op st = st{ operatorTable = t }
-               where t = Operators.updateOpTable (operatorTable st) op
-
+opDirective (Str "op" [Num (Left p), (Str a []), (Str n [])]) = do
+          st <- getState
+          updateState (\st -> st{ operatorTable = (t st)})
+          cached <- buildOpTable
+          updateState (\st -> st{ cachedTable = cached, cachedExprParser = buildExpressionParser cached})
+    where t st = Operators.updateOpTable (operatorTable st) op
           op  = mkOp ((fromInteger p)::Int, a, n)
           mkOp (p, a, n) = (Operators.Operator n a, p)
 
 opDirective _ = return ()
 
 -- top-level parsing
--- TODO: Parse block { }
--- TODO: Parse anonymous variable _
 -- TODO: Parse operators in head
 -- TODO: Parse predicates of form module:predicate.
 -- TODO: Attach position to AST
@@ -235,14 +241,16 @@ runPrologParser p st sourcename input = runP p' st sourcename input
 parseProlog2 input = do
     ops <- readFile "/home/angel/edu/phd/code/parsec-prolog/pl/op.pl"
     (p, optable)<- parse st' "/home/angel/edu/phd/code/parsec-prolog/pl/op.pl" ops
-    (p2, _) <- parse optable "" input
-    print p2
+    f <- readFile input
+    (p2, _) <- parse optable "" f
+--    print p2
+    print ("OK (clauses " ++ show (length p2) ++ ")")
     where parse st src input = case runPrologParser (many1 sentence) st src input of
                                    Left err ->  do putStr "parse error at"
                                                    print err
                                                    error ""
                                    Right res -> return res
-          st' = ParseSt []
+          st' = ParseSt [] [] (buildExpressionParser [])
 
 parseProlog p input = 
     case runPrologParser p st "" input of 
