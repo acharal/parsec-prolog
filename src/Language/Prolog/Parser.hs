@@ -239,8 +239,8 @@ runPrologParser p st sourcename input = runP p' st sourcename input
             return (res, st')
 
 parseProlog2 input = do
-    ops <- readFile "/home/angel/edu/phd/code/parsec-prolog/pl/op.pl"
-    (p, optable)<- parse st' "/home/angel/edu/phd/code/parsec-prolog/pl/op.pl" ops
+    ops <- readFile "pl/op.pl"
+    (p, optable)<- parse st' "pl/op.pl" ops
     f <- readFile input
     (p2, _) <- parse optable "" f
 --    print p2
