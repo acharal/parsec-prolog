@@ -1,6 +1,6 @@
 Name:               parsec-prolog
 Version:            0.0.1
-Cabal-Version:      >= 1.2
+Cabal-Version:      >= 1.8
 Build-Type:         Simple
 License:            LGPL
 License-File:       LICENSE
@@ -27,8 +27,8 @@ Source-repository head
 Executable test-prologparser
   Main-Is:          Main.hs
   Buildable:        True
-  Build-Depends:    base >= 3, parsec >= 3, bytestring
-  hs-source-dirs:   src
+  Build-Depends:    base >= 3, parsec-prolog
+  hs-source-dirs:   test
   Extensions:       FlexibleContexts 
   GHC-prof-options: -rtsopts -auto-all
 
@@ -38,4 +38,6 @@ Library
                     Language.Prolog.Operator,
                     Language.Prolog.Parser
   Build-Depends:    base >= 3, parsec >= 3, bytestring
+  hs-source-dirs:   src 
+  Extensions:       FlexibleContexts
   GHC-prof-options: -rtsopts -auto-all
