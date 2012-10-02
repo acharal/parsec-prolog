@@ -1,13 +1,41 @@
-name: parser-prolog
-version: 0.0.1
-build-type: Simple
-license: LGPL
-cabal-version:  >= 1.2
-maintainer: Angelos Charalambidis <a.charalambidis@di.uoa.gr>
+Name:               parsec-prolog
+Version:            0.0.1
+Cabal-Version:      >= 1.2
+Build-Type:         Simple
+License:            LGPL
+License-File:       LICENSE
+Copyright:          2012 Angelos Charalambidis
+Stability:          Experimental
+Synopsis:           Combinators for parsing ISO-prolog programs
+Tested-With:        GHC
+Category:           Parsing
+Description:
+    Parsec-Prolog is based upon parsec and defines combinators for parsing
+    ISO-Prolog logic programs.
+Author:             Angelos Charalambidis <a.charalambidis@di.uoa.gr>
+Maintainer:         Angelos Charalambidis <a.charalambidis@di.uoa.gr>
+Homepage:           https://github.com/acharal/parsec-prolog
+Bug-Reports:        https://github.com/acharal/parsec-prolog/issues
 
-library
-  exposed-modules: Language.Prolog.Parser
-                   Language.Prolog.Lexer
-  build-depends:   base >= 3, parsec >= 3
-  hs-source-dirs: src
-  extensions: FlexibleContexts
+Extra-Source-Files: AUTHORS
+                    README.md
+
+Source-repository head
+  type:             git
+  location:         https://github.com/acharal/parsec-prolog.git
+
+Executable test-prologparser
+  Main-Is:          Main.hs
+  Buildable:        True
+  Build-Depends:    base >= 3, parsec >= 3, bytestring
+  hs-source-dirs:   src
+  Extensions:       FlexibleContexts 
+  GHC-prof-options: -rtsopts -auto-all
+
+Library parsec-prolog
+  Exposed-Modules:  Language.Prolog.Syntax,
+                    Language.Prolog.Lexer,
+                    Language.Prolog.Operator,
+                    Language.Prolog.Parser
+  Build-Depends:    base >= 3, parsec >= 3, bytestring
+  GHC-prof-options: -rtsopts -auto-all
