@@ -8,14 +8,16 @@ import Text.Parsec
 import Text.Parsec.Expr
 import Data.Char
 import Data.List
+import Control.Monad (when)
 
 import qualified Data.ByteString.Char8 as C
 import Text.Parsec.ByteString
 
+-- type OperatorTable s u m a = [[Operator s u m a]]
+
 data ParseState s m = 
     ParseSt { operatorTable :: Operators.OperatorTable
-            , cachedTable   :: (OperatorTable s (ParseState s m) m [Expr])
-            , cachedExprParser :: ParserT s m [Expr] -> ParserT s m [Expr]
+            , cachedTable   :: [(Int, [Operator s (ParseState s m) m Expr])]
             } 
 
 type ParserT s m a = ParsecT s (ParseState s m) m a
@@ -84,7 +86,7 @@ struct =  do { s  <- atom
              ; return (Str s as)
              } <?> ("structure")
     where -- args = try (parens expr) <|> parens (do { e <- commaSep1 expr; return (concatMap id e)} )
-          args = parens (do { e <- commaSep1 expr; return (concatMap id e)} )
+          args = parens $ commaSep1 (try argexpr <|> term)
           atom = conIdent <|> stringLiteral
 
 constant :: Stream s m Char => ParserT s m Expr
@@ -106,7 +108,7 @@ term = choice [ variable
               , constant
               , list
               , cut
-              , parens term
+              , parens (try fullexpr <|> term)
               ] <?> ("term")
 
 cut :: Stream s m Char => ParserT s m Expr
@@ -115,7 +117,7 @@ cut = do { L.symbol L.prolog "!"; return (Str "!" []) }
 list :: Stream s m Char => ParserT s m Expr
 list = try listEmpty <|> listNonEmpty <?> ("list")  
     where 
-        listatom  = expr
+        listatom  = commaSep1 argexpr
         tail      = do { slash
                        ; variable <|> listEmpty
                        }
@@ -126,53 +128,52 @@ list = try listEmpty <|> listNonEmpty <?> ("list")
                                      ; return $ foldr (\n -> \m -> Cons n m) tl es 
                                      }
 
-expr :: Stream s m Char => ParserT s m [Expr]
-expr = try (do { exprs <- getParser term'
-               ; return (concatMap commaToList exprs)
-               })
-       <|>  term'
-    where
-          term' = parens expr <|> do { t <- term; return [t]; } 
-          commaToList (Op "," xs) = concatMap commaToList xs
-          commaToList e = [e]
---          getOpTable =  do { st <- getState; return (cachedTable st) }
-            
-          getParser t = do { st <-getState; cachedExprParser st t }
+argexpr :: Stream s m Char => ParserT s m Expr
+argexpr = expr 999
 
+fullexpr :: Stream s m Char => ParserT s m Expr
+fullexpr = expr 1200
 
-buildOpTable :: Stream s m Char => ParsecT s (ParseState s m) m (OperatorTable s (ParseState s m) m [Expr])
+expr :: Stream s m Char => Int -> ParserT s m Expr
+expr prec = getParser prec term
+    where getParser p t = do
+                st <- getState;
+                let opTbl = map snd $ takeWhile (\(p',_) -> p >= p') $ cachedTable st
+                buildExpressionParser opTbl t
+
+buildOpTable :: Stream s m Char => ParsecT s (ParseState s m) m [(Int, [Operator s (ParseState s m) m Expr])]
 buildOpTable = do { st <- getState
                   ; return $ mkOpTable (operatorTable st)
                   }
-    where mkOpTable ops = map (map opMap) $ Operators.groupByPrec ops
+    where mkOpTable ops = map (\(p, op) -> (p, map opMap op)) $ Operators.groupByPrec ops
             where 
               oper f name = try $ do { L.symbol L.prolog name
                                      ; notFollowedBy (choice ops2)
                                      ; return (f name) }
                    where ops2    = map (\x -> try (string x)) $ map (skip (length name)) opNames
-                         opNames = filter (f2 name) $ map (Operators.opName.fst) ops
+                         opNames = filter (f2 name) $ map (Operators.opName.snd) ops
                          f2 n m  = length n < length m && n `isPrefixOf` m
 
               opMap op | Operators.isPrefixOp  op = prefixOp (Operators.opName op)
                        | Operators.isPostfixOp op = postfixOp (Operators.opName op)
                        | otherwise                = infixOp (Operators.opName op) (assocMap op)
                        where 
-                             infixOp name assoc = Infix   (oper (\n -> \x -> \y -> [Op n (x ++ y)]) name) assoc
+                             infixOp name assoc = Infix   (oper (\n -> \x -> \y -> Op n [x,y]) name) assoc
 
-                             prefixOp name      = Prefix  (oper (\n -> \x -> [Op n x]) name)
+                             prefixOp name      = Prefix  (oper (\n -> \x -> Op n [x]) name)
  
-                             postfixOp name     = Postfix (oper (\n -> \x -> [Op n x]) name)
+                             postfixOp name     = Postfix (oper (\n -> \x -> Op n [x]) name)
 
                              assocMap op | Operators.isAssocLeft  op = AssocLeft
                                          | Operators.isAssocRight op = AssocRight
                                          | otherwise                = AssocNone
 
+{-
+literal :: Stream s m Char => ParserT s m Expr
+literal = fullexpr <?> ("literal")
 
-literal :: Stream s m Char => ParserT s m [Expr]
-literal = expr <?> ("literal")
-
-body :: Stream s m Char => ParserT s m [Expr]
-body = expr <?> ("body literal")
+body :: Stream s m Char => ParserT s m Expr
+body = fullexpr <?> ("body literal")
 
 fact :: Stream s m Char => ParserT s m (Maybe Expr, [Expr])
 fact = do {  h <- struct `followedBy` dot; return (Just h, []); }
@@ -205,22 +206,28 @@ sentence = choice [ command'
                   ] <?> ("sentence")
     where command' = do { c <- command
                         ; opDirective1 c
-                        ; return c }
+                       ; return c }
+-}
 
+sentence :: Stream s m Char => ParserT s m Expr
+sentence = fullexpr `followedBy` dot <?> ("sentence") 
+
+isCommand (Op ":-" [exp]) = True
+isCommand _ = False
 
 -- | Directives must be only in goal clause (without head literal)
 
-opDirective1 (Nothing, e:es) = opDirective e
+opDirective1 (Op ":-" [e]) = opDirective e
 opDirective1 _ = return ()
 
 opDirective (Str "op" [Num (Left p), (Str a []), (Str n [])]) = do
           st <- getState
           updateState (\st -> st{ operatorTable = (t st)})
           cached <- buildOpTable
-          updateState (\st -> st{ cachedTable = cached, cachedExprParser = buildExpressionParser cached})
+          updateState (\st -> st{ cachedTable = cached })
     where t st = Operators.updateOpTable (operatorTable st) op
           op  = mkOp ((fromInteger p)::Int, a, n)
-          mkOp (p, a, n) = (Operators.Operator n a, p)
+          mkOp (p, a, n) = (p, Operators.Operator n a)
 
 opDirective _ = return ()
 
@@ -244,12 +251,23 @@ parseProlog2 input = do
     f <- readFile input
     result <- parse optable input f
     return result
-    where parse st src input = case runPrologParser (many1 sentence) st src input of
+    where parse st src input = case runPrologParser (buildTable >> many1 sentence') st src input of
                                    Left err ->  do putStr "parse error at"
                                                    print err
                                                    fail ""
                                    Right res -> return res
-          st' = ParseSt [] [] (buildExpressionParser [])
+          sentence' = do 
+            s <- sentence
+            when (isCommand s) (opDirective1 s)
+            return s
+          buildTable = do 
+              cached <- buildOpTable
+              updateState (\st -> st{ cachedTable = cached })
+          ops = [(1200, Operators.Operator ":-" "xfx")
+                ,(1200, Operators.Operator ":-" "fx")
+                ,(1000, Operators.Operator "," "xfx")
+                ]
+          st' = ParseSt ops []
 
 parseProlog p input = 
     case runPrologParser p st "" input of 

@@ -5,17 +5,21 @@ import Data.List
 data Operator = Operator { opName :: String,  opAssoc :: String }
    deriving (Eq, Show)
 
-type OperatorTable = [(Operator, Int)]
+type OperatorTable = [(Int, Operator)]
 
 
-precOp (op,prec) = prec
+precOp (prec, op) = prec
 
 updateOpTable table op = op : deleteBy eqOp op table
-   where eqOp (op1, _) (op2, _) = op1 == op2
+   where eqOp (_, op1) (_, op2) = op1 == op2
 
-groupByPrec table = map (map fst) $ groupBy samePrec $ sortBy precComp table
+keyGroup :: (Eq a, Eq b) => [(a, b)] -> [(a, [b])]
+keyGroup lst = map aux $ group lst
+    where aux lst = (fst (head lst), map snd lst)
+
+groupByPrec :: OperatorTable -> [(Int, [Operator])]
+groupByPrec table = keyGroup $ sortBy precComp table
    where precComp op1 op2  = compare (precOp op1) (precOp op2)
-         samePrec op1 op2  = precOp op1 == precOp op2
 
 
 -- | determines fixity by the place of "f"
